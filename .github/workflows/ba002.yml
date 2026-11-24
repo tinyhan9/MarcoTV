@@ -97,10 +97,12 @@ jobs:
           if ($manifest -notmatch 'Ba002BootRelay') {
             $failures += "缺少 Ba002BootRelay"
           }
-          # HOME 声明必须唯一（多个会导致每次按 HOME 都弹选择框）
-          $homeCount = ([regex]::Matches($manifest, 'android\.intent\.category\.HOME')).Count
+          # HOME 声明必须唯一（多个会导致每次按 HOME 都弹选择框）。
+          # 注意 aapt2 会把同一个属性打印成「值 + Raw: 值」两段出现在同一行，
+          # 所以按行数计，不能按出现次数计。
+          $homeCount = @($manifest | Where-Object { $_ -match 'category\.HOME"' }).Count
           if ($homeCount -ne 1) {
-            $failures += "HOME 声明有 $homeCount 处，必须恰好 1 处"
+            $failures += "HOME 声明有 $homeCount 行，必须恰好 1 行（aapt2 每行含值与 Raw 两段）"
           }
 
           if ($failures.Count) {

@@ -96,3 +96,7 @@ CLAUDE.md
 !scripts/package_wallpapers.py
 !scripts/WallpaperCatalogChecks.java
 !scripts/test_wallpapers.py
+
+# 极光盒子 7X（BA002）适配层
+build_ba002/
+dist-ba002/

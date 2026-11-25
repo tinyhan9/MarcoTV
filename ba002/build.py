@@ -54,10 +54,10 @@ def env_with_toolchain() -> dict:
     scripts/build.py 的判断顺序一致。只有它不存在时才退回 JAVA_HOME /
     ANDROID_SDK_ROOT 环境变量。
 
-    为什么必须优先 toolchain.json：CI runner 预置的 ANDROID_SDK_ROOT 指向
-    C:\\Android\\android-sdk，里面没有 platforms/android-28；而 bootstrap 把
-    API 28 装在仓库自己的 .tools/platform 下。不读 json 就会让 aapt2 拿到一个
-    不存在的 android.jar，报 "failed to open APK: I/O error"。
+    为什么必须优先 toolchain.json：CI runner 也预置了一个 ANDROID_SDK_ROOT，
+    但那套 SDK 里没有 platforms/android-28；bootstrap 把 API 28 装在仓库自己的
+    .tools/platform 下。不读 json 就会让 aapt2 拿到一个不存在的 android.jar，
+    报 "failed to open APK: I/O error"。
     """
     env = dict(os.environ)
 
@@ -102,14 +102,22 @@ def env_with_toolchain() -> dict:
     keystore = Path(env.get("BA002_KEYSTORE") or (ROOT / DEFAULT_KEYSTORE))
     if not keystore.is_absolute():
         keystore = (ROOT / keystore).resolve()
-    env["MARCOTV_KEYSTORE"] = str(keystore)
+
     env["MARCOTV_KEY_ALIAS"] = env.get("BA002_KEY_ALIAS") or DEFAULT_ALIAS
     env.setdefault("MARCOTV_STORE_PASSWORD", env.get("BA002_STORE_PASSWORD") or DEFAULT_PASSWORD)
-    if not keystore.is_file():
-        log(f"警告：签名库 {keystore} 不存在，上游会生成一把一次性的开发钥匙")
-        log("      正式发布前请先跑 python ba002/setup_signing.py 并备份私钥")
-    else:
+
+    if keystore.is_file():
+        env["MARCOTV_KEYSTORE"] = str(keystore)
         log(f"签名库: {keystore}")
+    else:
+        # 上游 build.py 的语义：MARCOTV_KEYSTORE 指向不存在的文件会直接
+        # RuntimeError('Configured signing key does not exist')；
+        # 完全不设它才会退化成「现生成一把一次性开发钥匙」。
+        # CI 没有 secrets，需要后者，所以这里必须把变量清掉。
+        env.pop("MARCOTV_KEYSTORE", None)
+        log(f"警告：签名库 {keystore} 不存在")
+        log("      本次构建会生成一把一次性的开发钥匙，产物不可用于发布")
+        log("      要出正式包，先跑 python ba002/setup_signing.py 并备份 private/")
     return env
 
 

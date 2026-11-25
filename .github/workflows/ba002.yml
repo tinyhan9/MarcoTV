@@ -70,7 +70,13 @@ jobs:
         env:
           BA002_STORE_PASSWORD: ${{ secrets.BA002_STORE_PASSWORD }}
           BA002_KEY_ALIAS: ${{ secrets.BA002_KEY_ALIAS }}
-        run: python ba002/build.py
+        shell: pwsh
+        run: |
+          # 空 secret 在 Windows 上会变成空字符串环境变量，上游会拿它当口令去
+          # 建钥匙，结果签不上。显式清掉，让上游用自己的默认值。
+          if (-not $env:BA002_STORE_PASSWORD) { Remove-Item Env:BA002_STORE_PASSWORD -ErrorAction SilentlyContinue }
+          if (-not $env:BA002_KEY_ALIAS)      { Remove-Item Env:BA002_KEY_ALIAS -ErrorAction SilentlyContinue }
+          python ba002/build.py
 
       - name: Verify the artifact is actually adapted
         shell: pwsh

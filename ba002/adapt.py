@@ -244,15 +244,25 @@ def patch_manifest(stage: Path, debuggable: bool) -> None:
 
 # ---------------------------------------------------------------- 3. 抢前台接收器
 
+# 本分支新增、需要随构建注入 stage 的源文件。
+# Ba002RelayPolicy 把判定规则抽成纯逻辑，Ba002BootRelay 只负责接线 ——
+# 这样 ba002/test_relay.py 能在 JVM 上把所有分支跑完，不必装到电视上才发现判定写错。
+ADAPT_SOURCES = [
+    "Ba002BootRelay.java",
+    "Ba002RelayPolicy.java",
+]
+
+
 def install_relay(stage: Path) -> None:
-    source = Path(__file__).with_name("Ba002BootRelay.java")
-    if not source.is_file():
-        raise SystemExit(f"[ba002] 缺少 {source}")
-    target = stage / "app/src/main/java" / NEW_PKG.replace(".", "/") / "Ba002BootRelay.java"
-    target.parent.mkdir(parents=True, exist_ok=True)
-    text = read(source)
-    write(target, text.replace(f"package {OLD_PKG};", f"package {NEW_PKG};"))
-    log("已注入 Ba002BootRelay")
+    """把适配层源文件注入 stage，并把包名对齐成 NEW_PKG。"""
+    target_dir = stage / "app/src/main/java" / NEW_PKG.replace(".", "/")
+    target_dir.mkdir(parents=True, exist_ok=True)
+    for name in ADAPT_SOURCES:
+        source = Path(__file__).with_name(name)
+        if not source.is_file():
+            raise SystemExit(f"[ba002] 缺少 {source}")
+        write(target_dir / name, read(source).replace(f"package {OLD_PKG};", f"package {NEW_PKG};"))
+    log(f"已注入 {len(ADAPT_SOURCES)} 个适配层源文件: {', '.join(ADAPT_SOURCES)}")
 
 
 # ---------------------------------------------------------------- 4. 关闭应用内自动更新
@@ -292,17 +302,17 @@ def verify(stage: Path) -> None:
         problems.append("manifest 里没有 Ba002BootRelay")
 
     java_root = stage / "app/src/main/java" / NEW_PKG.replace(".", "/")
-    relay = java_root / "Ba002BootRelay.java"
-    if not relay.is_file():
-        problems.append("缺少 Ba002BootRelay.java")
-    else:
-        relay_text = read(relay)
-        if f"package {NEW_PKG};" not in relay_text:
-            problems.append("Ba002BootRelay 的 package 声明不对")
+    for name in ADAPT_SOURCES:
+        adapt_file = java_root / name
+        if not adapt_file.is_file():
+            problems.append(f"缺少 {name}")
+            continue
+        if f"package {NEW_PKG};" not in read(adapt_file):
+            problems.append(f"{name} 的 package 声明不对")
 
     if problems:
         raise SystemExit("[ba002] 自检失败：\n  - " + "\n  - ".join(problems))
-    log("自检通过：无旧包名残留、HOME 声明唯一、别名已启用、relay 已就位")
+    log("自检通过：无旧包名残留、HOME 声明唯一、别名已启用、适配层源文件已就位")
 
 
 # ---------------------------------------------------------------- 入口

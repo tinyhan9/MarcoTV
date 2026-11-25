@@ -25,29 +25,23 @@ import android.util.Log;
  *
  * <p>实测时间线（BA002，Android 11）：
  * <pre>
- *   17:07:38  BOOT_COMPLETED，本类排入 6 个重放时点
- *   17:07:52  厂商桌面 START ... from uid 1000
- *   17:07:58  slot 3 触发 —— 此时前台已经是厂商桌面
+ *   17:12:17  注册生命周期监听，排入 7 个重放时点
+ *   17:12:32  厂商桌面 START ... from uid 1000
+ *   17:12:35  slot 3 重放 HOME —— 前台抢回
+ *   17:12:42  之后各时点均判定「仍在本应用」，不再打扰
  * </pre>
  *
- * <p>怎么判断「自己还在不在前台」：<b>不能用</b> {@code getRunningTasks()}，从
- * API 21 起它只返回调用者自己的任务，判定永远为真；也<b>不能用</b>
- * {@code getRunningAppProcesses()} 的 importance —— 本应用绑定了无障碍服务，
- * 被盖住时进程仍是 {@code vis}（importance 200），实测 oom_adj 就是 100。
+ * <p>判定规则见 {@link Ba002RelayPolicy}，那里抽成了不依赖 Android 的纯逻辑，
+ * 由 {@code ba002/test_relay.py} 在 JVM 上跑全部分支。本类只负责接线。
  *
- * <p>可靠的做法是 Activity 生命周期：注册
- * {@link Application.ActivityLifecycleCallbacks}，本应用任何一个 Activity 被暂停
- * 就说明前台被别人占了。这个信号在应用内部，不依赖任何权限或隐藏 API。
+ * <p>为什么不用 {@code getRunningTasks()}：从 API 21 起它只返回调用者自己的任务，
+ * 「是否已在前台」永远为真。为什么不用进程 importance：本应用绑定了无障碍服务，
+ * 被盖住时进程仍是 {@code vis}（importance 200、oom_adj 100），也是误判。
+ * 可靠信号是 Activity 生命周期，它在应用内部，不需要权限也不需要隐藏 API。
  */
 public final class Ba002BootRelay extends BroadcastReceiver {
 
     private static final String TAG = "MarcoTVBa002Relay";
-
-    /**
-     * 开机后的重放时点（毫秒）。厂商桌面在 +14s 左右抢前台，所以重点覆盖
-     * 14s 之后；前面的时点是给「厂商抢得更早」的固件留的余量。
-     */
-    private static final long[] SLOTS = {2_000L, 6_000L, 12_000L, 18_000L, 25_000L, 35_000L, 50_000L};
 
     /** 本应用是否有 Activity 处于 resumed。只在主线程读写。 */
     private static volatile boolean resumed;
@@ -62,11 +56,11 @@ public final class Ba002BootRelay extends BroadcastReceiver {
         trackForeground(app);
 
         Handler handler = new Handler(Looper.getMainLooper());
-        for (int i = 0; i < SLOTS.length; i++) {
-            final int slot = i;
-            handler.postDelayed(() -> fire(app, slot), SLOTS[i]);
+        for (int slot = 0; slot < Ba002RelayPolicy.SLOTS.length; slot++) {
+            final int index = slot;
+            handler.postDelayed(() -> fire(app, index), Ba002RelayPolicy.delayFor(index));
         }
-        Log.i(TAG, "已排入 " + SLOTS.length + " 个抢回前台的时点");
+        Log.i(TAG, "已排入 " + Ba002RelayPolicy.SLOTS.length + " 个抢回前台的时点");
     }
 
     /** 注册一次即可；进程重启后重新注册。 */
@@ -74,29 +68,29 @@ public final class Ba002BootRelay extends BroadcastReceiver {
         if (tracking) return;
         try {
             Context base = context.getApplicationContext();
-            if (!(base instanceof Application)) {
-                base = context;
-            }
+            if (!(base instanceof Application)) base = context;
             if (!(base instanceof Application)) return;
-            ((Application) base).registerActivityLifecycleCallbacks(new Application.ActivityLifecycleCallbacks() {
-                @Override public void onActivityCreated(Activity activity, Bundle state) { }
-                @Override public void onActivityStarted(Activity activity) { }
-                @Override public void onActivityResumed(Activity activity) { resumed = true; }
-                @Override public void onActivityPaused(Activity activity) { resumed = false; }
-                @Override public void onActivityStopped(Activity activity) { }
-                @Override public void onActivitySaveInstanceState(Activity activity, Bundle state) { }
-                @Override public void onActivityDestroyed(Activity activity) { }
-            });
+            ((Application) base).registerActivityLifecycleCallbacks(
+                    new Application.ActivityLifecycleCallbacks() {
+                        @Override public void onActivityCreated(Activity activity, Bundle state) { }
+                        @Override public void onActivityStarted(Activity activity) { }
+                        @Override public void onActivityResumed(Activity activity) { resumed = true; }
+                        @Override public void onActivityPaused(Activity activity) { resumed = false; }
+                        @Override public void onActivityStopped(Activity activity) { }
+                        @Override public void onActivitySaveInstanceState(Activity activity, Bundle state) { }
+                        @Override public void onActivityDestroyed(Activity activity) { }
+                    });
             tracking = true;
             Log.i(TAG, "已注册生命周期监听");
         } catch (Throwable e) {
+            // 注册失败时 tracking 保持 false，Ba002RelayPolicy 会要求无条件重放
             Log.w(TAG, "注册生命周期监听失败，将无条件重放 HOME", e);
         }
     }
 
     private static void fire(Context context, int slot) {
         try {
-            if (resumed) {
+            if (!Ba002RelayPolicy.shouldReplay(resumed, tracking)) {
                 Log.i(TAG, "slot " + slot + " 跳过：本应用仍在前台");
                 return;
             }

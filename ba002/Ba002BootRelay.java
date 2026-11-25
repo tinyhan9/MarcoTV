@@ -109,7 +109,11 @@ public final class Ba002BootRelay extends BroadcastReceiver {
                 }
                 try {
                     Log.i(TAG, "网络就绪，触发更新检查");
-                    UpdateManager.get(context).automatic();
+                    // 直接调 check(false)，不要 automatic()。
+                    // automatic() = 「距上次检查满 6 小时」+ check()；开机这一次
+                    // 若被节流挡掉，用户装完就永远看不到第一次更新。
+                    // 每个开机周期查一次是合理频率，check() 本身没有节流。
+                    UpdateManager.get(context).check(false);
                 } catch (Throwable e) {
                     Log.w(TAG, "开机更新检查未触发", e);
                 }

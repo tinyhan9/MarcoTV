@@ -43,6 +43,9 @@ public final class Ba002BootRelay extends BroadcastReceiver {
 
     private static final String TAG = "MarcoTVBa002Relay";
 
+    /** 开机后多久触发一次更新检查（毫秒）。放在抢前台窗口之后。 */
+    private static final long EXIT_UPDATE_DELAY = 60_000L;
+
     /** 本应用是否有 Activity 处于 resumed。只在主线程读写。 */
     private static volatile boolean resumed;
     private static boolean tracking;
@@ -61,6 +64,22 @@ public final class Ba002BootRelay extends BroadcastReceiver {
             handler.postDelayed(() -> fire(app, index), Ba002RelayPolicy.delayFor(index));
         }
         Log.i(TAG, "已排入 " + Ba002RelayPolicy.SLOTS.length + " 个抢回前台的时点");
+
+        // 顺带触发一次更新检查。
+        //
+        // 上游只在「设置 → 软件更新」这一页被打开时才检查（UpdatePanel.resume()
+        // 里排那个 30 分钟的定时器）。对本适配版来说那样不够：本分支的更新源是
+        // 自己的仓库，用户不会天天去翻设置页，等于自动更新失效。
+        //
+        // 放到开机 60 秒后：避开开机时的抢前台窗口，也不和 BOOT_COMPLETED 的
+        // 广播链抢主线程。UpdateManager 内部有 6 小时的节流，重复触发是安全的。
+        handler.postDelayed(() -> {
+            try {
+                UpdateManager.get(context).automatic();
+            } catch (Throwable e) {
+                Log.w(TAG, "开机更新检查未触发", e);
+            }
+        }, EXIT_UPDATE_DELAY);
     }
 
     /** 注册一次即可；进程重启后重新注册。 */

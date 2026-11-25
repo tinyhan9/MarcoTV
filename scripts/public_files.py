@@ -5,7 +5,9 @@ from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[1]
 ROOT_FILES=['README.md','LICENSE','NOTICE','assets-notes.md','.gitignore',
-            'CONTRIBUTING.md','SECURITY.md','CHANGELOG.md']
+            'CONTRIBUTING.md','SECURITY.md','CHANGELOG.md',
+            # 极光盒子 7X（BA002）适配分支新增的文档
+            'BA002.md','INSTALL.md']
 SCRIPT_FILES=['bootstrap.py','build.py','setup_system.py','start_task_bridge.py','test_offline.py','test_ambient_weather.py','AmbientWeatherChecks.java','test_motion.py','test_core_consistency.py','CoreConsistencyChecks.java','test_motion_lifecycle.py','MotionLifecycleChecks.java',
               'test_restricted.py','test_home_auto.py','HomeAutoChecks.java','HomeSnapshotChecks.java','test_home_guide.py','HomeGuideChecks.java',
               'LocalAdbWireChecks.java','test_feedback.py','FeedbackPolicyChecks.java','test_feedback_transport.py','FeedbackTransportChecks.java','FeedbackDeviceChecks.java',
@@ -20,6 +22,9 @@ def source_files():
         files.extend(p for p in (ROOT/folder).rglob('*') if p.is_file() and '__pycache__' not in p.parts)
     files.extend(p for p in (ROOT/'installer').rglob('*') if p.is_file()
                  and p.suffix in {'.cs','.java','.py','.xml','.md','.json'}
+                 and '__pycache__' not in p.parts)
+    # 极光盒子 7X（BA002）适配分支：适配脚本与开机 relay 源码
+    files.extend(p for p in (ROOT/'ba002').rglob('*') if p.is_file()
                  and '__pycache__' not in p.parts)
     return sorted(files)
 

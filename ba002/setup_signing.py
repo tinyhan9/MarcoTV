@@ -1,5 +1,6 @@
 # Copyright (C) 2026 tinyhan9
 # SPDX-License-Identifier: GPL-3.0-only
+# Marco TV 由 Pilipala 开发（https://github.com/Pilipala9919/MarcoTV）；本文件是本分支新增的适配层。
 #
 # 生成本仓库固定的签名库。只需跑一次，之后请把 private/ 整个备份到离线介质。
 #

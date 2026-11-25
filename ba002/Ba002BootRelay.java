@@ -1,5 +1,8 @@
 // Copyright (C) 2026 tinyhan9
 // SPDX-License-Identifier: GPL-3.0-only
+//
+// 本文件是本分支为 Marco TV（作者 Pilipala，https://github.com/Pilipala9919/MarcoTV，
+// GPL-3.0-only）新增的适配层，不含上游代码。
 package com.pilipala.tvhome;
 
 import android.app.ActivityManager;

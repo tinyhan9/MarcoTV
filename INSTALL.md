@@ -47,7 +47,7 @@
 
 ## 第一步：把 APK 装进盒子
 
-先下载：[**MarcoTV-0.21.3-BA002.apk**](../../releases/latest)
+先下载：[**MarcoTV-0.21.3-BA002.apk**](https://github.com/tinyhan9/MarcoTV/releases/latest)
 
 顺手对一下校验和，确保文件没被下载坏（可跳过，出问题时再回来查）：
 
@@ -444,7 +444,7 @@ adb shell pm query-activities -a android.intent.action.MAIN -c android.intent.ca
 
 ## 还有问题
 
-开 [issue](../../issues)，附上这几样东西能大幅加快定位：
+开 [issue](https://github.com/tinyhan9/MarcoTV/issues)，附上这几样东西能大幅加快定位：
 
 ```bash
 adb shell dumpsys package com.xiaopaitech.plauncher.marcotv | grep versionName

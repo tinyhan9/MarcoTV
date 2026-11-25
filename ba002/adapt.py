@@ -1,6 +1,9 @@
 # Copyright (C) 2026 tinyhan9
 # SPDX-License-Identifier: GPL-3.0-only
 #
+# 改编自 Marco TV（作者 Pilipala，https://github.com/Pilipala9919/MarcoTV，GPL-3.0-only）。
+# 本文件是本分支新增的适配层，不含上游代码。
+#
 # 极光盒子 7X（BA002）适配层 —— 源码级变换
 #
 # 设计原则：**不改上游任何被 git 跟踪的文件**。

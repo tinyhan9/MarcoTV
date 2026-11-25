@@ -1,5 +1,6 @@
 # Copyright (C) 2026 tinyhan9
 # SPDX-License-Identifier: GPL-3.0-only
+# Marco TV 由 Pilipala 开发（https://github.com/Pilipala9919/MarcoTV）；本文件是本分支新增的适配层。
 #
 # 极光盒子 7X（BA002）设备侧部署脚本
 #

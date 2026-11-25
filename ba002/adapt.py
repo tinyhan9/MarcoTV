@@ -235,6 +235,21 @@ def patch_manifest(stage: Path, debuggable: bool) -> None:
     manifest = stage / "app/src/main/AndroidManifest.xml"
     text = read(manifest)
 
+    # versionName 不动（与上游完全对齐）；versionCode 加 RELEASE_REVISION，
+    # 否则已装同 code 的设备永远看不到本分支的修订版。
+    match = re.search(r'android:versionCode="(\d+)"', text)
+    if not match:
+        raise SystemExit("[ba002] manifest 里找不到 android:versionCode")
+    official_code = int(match.group(1))
+    release_code = official_code + RELEASE_REVISION
+    if RELEASE_REVISION:
+        text = text.replace(
+            f'android:versionCode="{official_code}"',
+            f'android:versionCode="{release_code}"',
+            1,
+        )
+    log(f"versionCode {official_code} -> {release_code}（versionName 保持上游）")
+
     text = replace_once(text, ALIAS_OLD, ALIAS_NEW, "HomeActivity 别名的 enabled=false")
 
     if debuggable:
@@ -294,6 +309,11 @@ def install_relay(stage: Path) -> None:
 REPO_OWNER = "tinyhan9"
 REPO_NAME = "MarcoTV"
 REPO_BRANCH = "ba002"
+
+# versionName 与上游对齐（用户要求），versionCode 在上游基础上加这个数。
+# 每次本分支单独发修订版时把它加 1。上游发新版时通常可以归 0，
+# 因为上游的 code 本身已经变大了。
+RELEASE_REVISION = 1
 FEED_PATH = "docs/updates/"
 
 # raw.githubusercontent 不受 Pages 与 CDN 缓存影响，改动立刻生效，放第一位。

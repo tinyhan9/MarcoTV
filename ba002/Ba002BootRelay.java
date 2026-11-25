@@ -46,6 +46,12 @@ public final class Ba002BootRelay extends BroadcastReceiver {
     /** 开机后多久触发一次更新检查（毫秒）。放在抢前台窗口之后。 */
     private static final long EXIT_UPDATE_DELAY = 60_000L;
 
+    /** 网络未就绪时的重试间隔（毫秒）。 */
+    private static final long UPDATE_CHECK_RETRY_DELAY = 20_000L;
+
+    /** 最多重试次数，约 3 分钟。 */
+    private static final int UPDATE_CHECK_RETRIES = 10;
+
     /** 本应用是否有 Activity 处于 resumed。只在主线程读写。 */
     private static volatile boolean resumed;
     private static boolean tracking;
@@ -73,13 +79,55 @@ public final class Ba002BootRelay extends BroadcastReceiver {
         //
         // 放到开机 60 秒后：避开开机时的抢前台窗口，也不和 BOOT_COMPLETED 的
         // 广播链抢主线程。UpdateManager 内部有 6 小时的节流，重复触发是安全的。
+        // 首次检查推迟到网络就绪之后。
+        //
+        // 为什么不能直接 60 秒就叫：UpdateManager.check() 一进入就写 last_attempt，
+        // 失败也不清。开机时网络常常还没通，第一次拉 feed 失败就把 6 小时节流
+        // 额度烧掉了，用户接下来 6 小时都看不到更新。实测就是这样丢的。
+        //
+        // 不修改上游代码，改在这里做探测：能连上 443 才触发，连不上就 20 秒后
+        // 再试，最多 10 次（约 3 分钟），之后放弃，等下一次开机。
+        scheduleUpdateCheck(app, handler, 0);
+    }
+
+    /** 开机后等网络就绪再触发一次更新检查；最多重试 10 次。 */
+    private static void scheduleUpdateCheck(Context context, Handler handler,
+                                            int attempt) {
+        if (attempt >= UPDATE_CHECK_RETRIES) {
+            Log.i(TAG, "网络一直不可达，放弃本次开机检查");
+            return;
+        }
+        long delay = attempt == 0 ? EXIT_UPDATE_DELAY : UPDATE_CHECK_RETRY_DELAY;
         handler.postDelayed(() -> {
-            try {
-                UpdateManager.get(context).automatic();
-            } catch (Throwable e) {
-                Log.w(TAG, "开机更新检查未触发", e);
-            }
-        }, EXIT_UPDATE_DELAY);
+            // 探测要在后台做：主线程不允许网络 IO（NetworkOnMainThreadException），
+            // 而且 5 秒超时会卡住桌面。
+            new Thread(() -> {
+                if (!networkReady()) {
+                    Log.i(TAG, "网络未就绪，稍后重试更新检查（" + (attempt + 1) + "）");
+                    handler.post(() -> scheduleUpdateCheck(context, handler, attempt + 1));
+                    return;
+                }
+                try {
+                    Log.i(TAG, "网络就绪，触发更新检查");
+                    UpdateManager.get(context).automatic();
+                } catch (Throwable e) {
+                    Log.w(TAG, "开机更新检查未触发", e);
+                }
+            }, "ba002-update-probe").start();
+        }, delay);
+    }
+
+    /** 能不能连上更新源所在的 443 端口。连不上就说明网络还没就绪。 */
+    private static boolean networkReady() {
+        java.net.Socket socket = new java.net.Socket();
+        try {
+            socket.connect(new java.net.InetSocketAddress("raw.githubusercontent.com", 443), 5000);
+            return true;
+        } catch (Throwable e) {
+            return false;
+        } finally {
+            try { socket.close(); } catch (Throwable ignored) { }
+        }
     }
 
     /** 注册一次即可；进程重启后重新注册。 */

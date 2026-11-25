@@ -313,7 +313,7 @@ REPO_BRANCH = "ba002"
 # versionName 与上游对齐（用户要求），versionCode 在上游基础上加这个数。
 # 每次本分支单独发修订版时把它加 1。上游发新版时通常可以归 0，
 # 因为上游的 code 本身已经变大了。
-RELEASE_REVISION = 8
+RELEASE_REVISION = 9
 FEED_PATH = "docs/updates/"
 
 # raw.githubusercontent 不受 Pages 与 CDN 缓存影响，改动立刻生效，放第一位。

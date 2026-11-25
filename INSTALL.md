@@ -322,6 +322,8 @@ adb shell cmd settings put secure accessibility_enabled 1
 
 > 只升级 APK 会掉这一项。「默认桌面身份」和「launcher.mode」这两项**不会**掉，重启和升级都不影响。
 
+> **应用内自动更新也一样**：在电视上点「安装」升级完，无障碍服务同样会被系统重置，记得重跑上面这条命令（或重新开关一次无障碍服务）。
+
 ---
 
 ## 出问题了

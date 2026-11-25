@@ -61,6 +61,7 @@ from __future__ import annotations
 
 import io
 import os
+import re
 import shutil
 from pathlib import Path
 
@@ -92,7 +93,10 @@ TEXT_SUFFIXES = {
 
 # 上游 UpdateManager 的默认更新模式
 UPDATE_MODE_OLD = 'return prefs.getString("mode","notify");'
-UPDATE_MODE_NEW = 'return prefs.getString("mode","off");'
+# download：自动检查并下载到本地，然后由用户在更新页点一下安装。
+# 之所以不选 off：本分支的更新源已经指向自己的仓库，包名与签名都对得上，
+# 自动更新是可以真正走通的。之所以不选 notify：那样用户还得自己点下载。
+UPDATE_MODE_NEW = 'return prefs.getString("mode","download");'
 
 
 def log(message: str) -> None:
@@ -113,11 +117,17 @@ def iter_text_files(root: Path):
 
 
 def read(path: Path) -> str:
-    return io.open(path, "r", encoding="utf-8", errors="surrogateescape", newline="").read()
+    """读成 LF 归一化的文本。
+
+    为什么归一化：这个仓库在 Windows 上检出时是 CRLF，而所有锚点片段都按 LF 写。
+    不归一化的话 `text.count(old)` 恒为 0，replace_once 会误报「找不到」，看起来
+    像上游改了结构。stage 目录是构建中间产物，换行风格不影响 aapt2 / javac。
+    """
+    return io.open(path, "r", encoding="utf-8", errors="surrogateescape", newline="").read().replace("\r\n", "\n")
 
 
 def write(path: Path, text: str) -> None:
-    io.open(path, "w", encoding="utf-8", errors="surrogateescape", newline="").write(text)
+    io.open(path, "w", encoding="utf-8", errors="surrogateescape", newline="\n").write(text)
 
 
 def replace_once(text: str, old: str, new: str, what: str) -> str:
@@ -265,14 +275,100 @@ def install_relay(stage: Path) -> None:
     log(f"已注入 {len(ADAPT_SOURCES)} 个适配层源文件: {', '.join(ADAPT_SOURCES)}")
 
 
-# ---------------------------------------------------------------- 4. 关闭应用内自动更新
+# ---------------------------------------------------------------- 4. 自动更新指向本仓库
+
+# 上游 UpdatePolicy 把更新源写死成 Pilipala9919 的仓库与镜像。本分支的包名、
+# 签名都与官方不同，官方 APK 永远装不上（verifyApk 会比对签名），所以必须把
+# 更新源换成自己的，否则应用内「检查更新」只会拿到一个注定装不上的包。
+#
+# 换源时要同时改五处，漏一处就会在运行时被拦下或连不上：
+#   1. feeds()      —— 频道文件名加 ba002- 前缀，避免和上游 feed 混淆
+#   2. MIRROR/FEED  —— 两个 feed 地址
+#   3. downloads()  —— APK 下载地址
+#   4. apkUrl()     —— 允许的 APK 主机与路径前缀
+#   5. transferUrl()—— 允许的重定向/传输主机
+#
+# 安全性不靠这里：verifyApk 会强制比对包名、versionCode、versionName 与
+# **签名证书**，官方包（签名不同）即使被喂进来也会被拒。
+
+REPO_OWNER = "tinyhan9"
+REPO_NAME = "MarcoTV"
+REPO_BRANCH = "ba002"
+FEED_PATH = "docs/updates/"
+
+# raw.githubusercontent 不受 Pages 与 CDN 缓存影响，改动立刻生效，放第一位。
+FEED_PRIMARY = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{REPO_BRANCH}/{FEED_PATH}"
+# jsDelivr 在国内通常可达，作为后备；注意它按分支缓存，可能延迟数小时。
+FEED_FALLBACK = f"https://cdn.jsdelivr.net/gh/{REPO_OWNER}/{REPO_NAME}@{REPO_BRANCH}/{FEED_PATH}"
+
+UPDATE_MIRROR_OLD = 'static final String FEED="https://pilipala9919.github.io/MarcoTV/updates/";\n    static final String MIRROR="https://marcotv.wlj9919.top/";'
+UPDATE_MIRROR_NEW = (
+    f'static final String FEED="{FEED_FALLBACK}";\n'
+    f'    static final String MIRROR="{FEED_PRIMARY}";'
+)
+
+UPDATE_FEEDS_OLD = """        String name=(BuildEdition.RESTRICTED?"restricted-":"")+channel;
+        return new String[]{MIRROR+"updates/"+name+".json",FEED+name+".json"};"""
+UPDATE_FEEDS_NEW = """        // 本分支用自己的频道文件（ba002-stable.json / ba002-preview.json），
+        // 与上游的 stable.json 分开，互不覆盖。
+        String name="ba002-"+channel+".json";
+        return new String[]{MIRROR+name,FEED+name};"""
+
+UPDATE_DOWNLOAD_OLD = """        String file="MarcoTV-"+version+(BuildEdition.RESTRICTED?"-Restricted":"")+".apk";
+        return new String[]{MIRROR+file,"https://github.com/Pilipala9919/MarcoTV/releases/download/v"+version+"/"+file};"""
+UPDATE_DOWNLOAD_NEW = """        String file="MarcoTV-"+version+"-BA002.apk";
+        return new String[]{"https://github.com/""" + REPO_OWNER + "/" + REPO_NAME + """/releases/download/v"+version+"-ba002/"+file};"""
+
+# apkUrl 用整段方法替换而不是字符串锚点：方法体里有 Java 正则（反斜杠成对出现），
+# 写成 Python 字符串常量时转义层数极易数错，数错就会误报「上游结构变了」。
+UPDATE_APKURL_PATTERN = r"static boolean apkUrl\(String value\)\{.*?\n    \}\n"
+
+UPDATE_APKURL_NEW = """static boolean apkUrl(String value){
+        try{
+            URI u=new URI(value);
+            if(!editionUrl(u.getPath()))return false;
+            // 只信任本仓库的 release 资产；官方包签名不同，verifyApk 仍会拒绝。
+            return "https".equals(u.getScheme())
+                    &&u.getUserInfo()==null&&u.getPort()==-1&&u.getQuery()==null&&u.getFragment()==null
+                    &&"github.com".equals(u.getHost())
+                    &&u.getPath().startsWith("/__REPO_OWNER__/__REPO_NAME__/releases/download/")
+                    &&u.getPath().endsWith(".apk")
+                    &&!u.getPath().contains("..")&&u.getRawPath().equals(u.getPath());
+        }catch(Exception e){
+            return false;
+        }
+    }
+"""
+
+UPDATE_TRANSFER_OLD = """                    &&("marcotv.wlj9919.top".equals(h)||"pilipala9919.github.io".equals(h)||"github.com".equals(h)||"release-assets.githubusercontent.com".equals(h)||"objects.githubusercontent.com".equals(h));"""
+UPDATE_TRANSFER_NEW = """                    &&("raw.githubusercontent.com".equals(h)||"cdn.jsdelivr.net".equals(h)
+                    ||"github.com".equals(h)||"release-assets.githubusercontent.com".equals(h)||"objects.githubusercontent.com".equals(h));"""
+
+
+def patch_update_endpoint(stage: Path) -> None:
+    """把应用内更新检查指向本仓库，而不是上游。"""
+    policy = stage / "app/src/main/java" / NEW_PKG.replace(".", "/") / "UpdatePolicy.java"
+    text = read(policy)
+    text = replace_once(text, UPDATE_MIRROR_OLD, UPDATE_MIRROR_NEW, "UpdatePolicy 的 FEED / MIRROR 常量")
+    text = replace_once(text, UPDATE_FEEDS_OLD, UPDATE_FEEDS_NEW, "UpdatePolicy.feeds() 的频道文件名")
+    text = replace_once(text, UPDATE_DOWNLOAD_OLD, UPDATE_DOWNLOAD_NEW, "UpdatePolicy.downloads() 的下载地址")
+    new_apkurl = UPDATE_APKURL_NEW.replace("__REPO_OWNER__", REPO_OWNER).replace("__REPO_NAME__", REPO_NAME)
+    text, hits = re.subn(UPDATE_APKURL_PATTERN, new_apkurl, text, count=1, flags=re.S)
+    if hits != 1:
+        raise SystemExit("[ba002] 适配失败：UpdatePolicy.apkUrl() 结构变了，找不到方法边界")
+    text = replace_once(text, UPDATE_TRANSFER_OLD, UPDATE_TRANSFER_NEW, "UpdatePolicy.transferUrl() 的主机白名单")
+    write(policy, text)
+    log("应用内更新源已指向本仓库")
+
+
+# ---------------------------------------------------------------- 5. 关闭应用内自动更新
 
 def disable_self_update(stage: Path) -> None:
     manager = stage / "app/src/main/java" / NEW_PKG.replace(".", "/") / "UpdateManager.java"
     text = read(manager)
     text = replace_once(text, UPDATE_MODE_OLD, UPDATE_MODE_NEW, "UpdateManager.mode() 默认值 notify")
     write(manager, text)
-    log("应用内自动更新默认关闭")
+    log("应用内自动更新默认 download（自动下载、手动确认安装）")
 
 
 # ---------------------------------------------------------------- 5. 自检
@@ -330,6 +426,7 @@ def adapt(source: Path, stage: Path, debuggable: bool = True) -> Path:
     rename_package(stage)
     patch_manifest(stage, debuggable)
     install_relay(stage)
+    patch_update_endpoint(stage)
     disable_self_update(stage)
     verify(stage)
     return stage

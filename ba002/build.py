@@ -44,19 +44,57 @@ def log(message: str) -> None:
     print(f"[build] {message}")
 
 
+TOOLCHAIN = ROOT / ".tools/toolchain.json"
+
+
 def env_with_toolchain() -> dict:
+    """准备构建环境。
+
+    优先用 scripts/bootstrap.py 装出来的 .tools/toolchain.json —— 这与上游
+    scripts/build.py 的判断顺序一致。只有它不存在时才退回 JAVA_HOME /
+    ANDROID_SDK_ROOT 环境变量。
+
+    为什么必须优先 toolchain.json：CI runner 预置的 ANDROID_SDK_ROOT 指向
+    C:\\Android\\android-sdk，里面没有 platforms/android-28；而 bootstrap 把
+    API 28 装在仓库自己的 .tools/platform 下。不读 json 就会让 aapt2 拿到一个
+    不存在的 android.jar，报 "failed to open APK: I/O error"。
+    """
     env = dict(os.environ)
-    jdk = env.get("JAVA_HOME")
-    sdk = env.get("ANDROID_SDK_ROOT") or env.get("ANDROID_HOME")
-    if not jdk or not sdk:
-        raise SystemExit(
-            "[build] 需要 JAVA_HOME 与 ANDROID_SDK_ROOT。\n"
-            "  这两个变量只用于构建，不会写进 APK。"
-        )
+
+    if TOOLCHAIN.is_file():
+        import json
+
+        config = json.loads(TOOLCHAIN.read_text(encoding="utf-8"))
+        jdk = config["jdk"]
+        log(f"工具链: {TOOLCHAIN}")
+        log(f"  JDK     {jdk}")
+        log(f"  API jar {config['android_jar']}")
+        log(f"  tools   {config['build_tools']}")
+        android_jar = Path(config["android_jar"])
+        if not android_jar.is_file():
+            raise SystemExit(
+                f"[build] toolchain.json 指向的 android.jar 不存在: {android_jar}\n"
+                "  重新跑 python scripts/bootstrap.py"
+            )
+    else:
+        jdk = env.get("JAVA_HOME")
+        sdk = env.get("ANDROID_SDK_ROOT") or env.get("ANDROID_HOME")
+        if not jdk or not sdk:
+            raise SystemExit(
+                "[build] 找不到 .tools/toolchain.json，也没有 JAVA_HOME / ANDROID_SDK_ROOT。\n"
+                "  推荐先跑 python scripts/bootstrap.py（会拉取校验过的 JDK + API 28 + build-tools）；\n"
+                "  或者手工设置这两个环境变量后再构建。"
+            )
+        android_jar = Path(sdk) / "platforms/android-28/android.jar"
+        if not android_jar.is_file():
+            raise SystemExit(
+                f"[build] 环境变量指向的 SDK 里没有 API 28: {android_jar}\n"
+                "  要么装 platforms;android-28，要么跑 python scripts/bootstrap.py 用仓库自带的工具链。"
+            )
+        env.setdefault("MARCOTV_BUILD_TOOLS", "36.0.0")
+        log(f"工具链: 环境变量（{sdk}）")
+
     env["JAVA_HOME"] = jdk
-    env["ANDROID_SDK_ROOT"] = sdk
-    env["ANDROID_HOME"] = sdk
-    env.setdefault("MARCOTV_BUILD_TOOLS", "36.0.0")
     env["PATH"] = str(Path(jdk) / "bin") + os.pathsep + env.get("PATH", "")
 
     # 签名库：固定用本仓库自己的，避免每次构建都现生成一把新钥匙
@@ -110,6 +148,16 @@ def main() -> None:
 
     version = read_version(stage)
     log(f"版本: {version}")
+
+    # 把 toolchain.json 带进 stage。stage 是干净复制出来的，不含 .tools，
+    # 而上游 scripts/build.py 只在 stage 根目录下找 .tools/toolchain.json；
+    # 找不到就退回环境变量，也就找不到 bootstrap 装好的 API 28。
+    # json 里存的是绝对路径，指向仓库的 .tools，所以只复制这一个文件就够。
+    if TOOLCHAIN.is_file():
+        staged = stage / ".tools/toolchain.json"
+        staged.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(TOOLCHAIN, staged)
+        log("已把 toolchain.json 带进 stage")
 
     # 复用上游的构建脚本：aapt2 → javac → d8 → zipalign → apksigner，逻辑一条不抄
     run([sys.executable, "scripts/build.py"], cwd=stage, env=env)

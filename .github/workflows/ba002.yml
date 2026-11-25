@@ -75,42 +75,65 @@ jobs:
       - name: Verify the artifact is actually adapted
         shell: pwsh
         run: |
+          # aapt2 从 bootstrap 装好的 toolchain.json 取，不依赖 runner 预置 SDK 的版本号
+          $tc = Get-Content .tools/toolchain.json | ConvertFrom-Json
+          $aapt2 = Join-Path $tc.build_tools 'aapt2.exe'
+          if (-not (Test-Path $aapt2)) { Write-Error "找不到 aapt2: $aapt2"; exit 1 }
+
           $apk = Get-ChildItem dist-ba002/*.apk | Select-Object -First 1
-          $badging = & "$env:ANDROID_SDK_ROOT/build-tools/$env:MARCOTV_BUILD_TOOLS/aapt2.exe" dump badging $apk.FullName
-          $manifest = & "$env:ANDROID_SDK_ROOT/build-tools/$env:MARCOTV_BUILD_TOOLS/aapt2.exe" dump xmltree --file AndroidManifest.xml $apk.FullName
+          if (-not $apk) { Write-Error "dist-ba002 里没有 APK"; exit 1 }
+
+          # aapt2 输出是多行，PowerShell 会存成 string[]。
+          # 对数组用 -match/-notmatch 得到的是「匹配到的元素」而非布尔值，
+          # if 判定会恒为真。所以先拼成单个字符串再匹配。
+          $badging  = (& $aapt2 dump badging $apk.FullName) -join "`n"
+          $manifest = (& $aapt2 dump xmltree --file AndroidManifest.xml $apk.FullName) -join "`n"
+
+          # 期望值不写死：包名读 adapt.py，版本号读上游未改动的 manifest。
+          # 上游发新版时这两个值会自动跟进，不用回来改工作流。
+          $adaptSrc = Get-Content ba002/adapt.py -Raw
+          if ($adaptSrc -notmatch 'NEW_PKG = "([^"]+)"') { Write-Error "adapt.py 里没有 NEW_PKG"; exit 1 }
+          $expectedPkg = $Matches[1]
+
+          [xml]$srcManifest = Get-Content app/src/main/AndroidManifest.xml -Raw -Encoding utf8
+          $expectedVersion = $srcManifest.manifest.versionName
 
           $failures = @()
 
-          # 包名必须落在固件的 HOME 白名单前缀下，否则装上也当不了桌面
-          if ($badging -notmatch "package: name='com\.xiaopaitech\.plauncher\.marcotv'") {
-            $failures += "包名不正确（必须命中 enable_launcher_components 的前缀）"
+          # ① 包名必须落在固件 HOME 白名单的前缀下，否则装上也当不了桌面
+          if ($badging -notmatch [regex]::Escape("package: name='$expectedPkg'")) {
+            $failures += "包名不是 $expectedPkg（必须命中 enable_launcher_components 的前缀）"
           }
-          # 版本号要与上游对齐
-          if ($badging -notmatch "versionName='0\.21\.3'") {
-            $failures += "versionName 与上游不对齐"
+          # ② 版本号要与上游 manifest 一致
+          if ($badging -notmatch [regex]::Escape("versionName='$expectedVersion'")) {
+            $failures += "versionName 不是 $expectedVersion，与上游不对齐"
           }
-          # 别名要静态启用
+          # ③ HOME 别名要在 APK 里
           if ($manifest -notmatch 'HomeActivity') {
             $failures += "缺少 HomeActivity 别名"
           }
-          # 抢前台接收器要在
+          # ④ 抢前台接收器要在
           if ($manifest -notmatch 'Ba002BootRelay') {
             $failures += "缺少 Ba002BootRelay"
           }
-          # HOME 声明必须唯一（多个会导致每次按 HOME 都弹选择框）。
-          # 注意 aapt2 会把同一个属性打印成「值 + Raw: 值」两段出现在同一行，
-          # 所以按行数计，不能按出现次数计。
-          $homeCount = @($manifest | Where-Object { $_ -match 'category\.HOME"' }).Count
+          # ⑤ HOME 声明必须唯一：同包多个 HOME 组件会让
+          #    PreferredComponent.sameSet() 校验失效，表现为每次按 HOME 都弹选择框。
+          #    aapt2 把同一个属性打成「值 + Raw: 值」在同一行，所以按行数计。
+          $homeCount = @($manifest -split "`n" | Where-Object { $_ -match 'category\.HOME"' }).Count
           if ($homeCount -ne 1) {
-            $failures += "HOME 声明有 $homeCount 行，必须恰好 1 行（aapt2 每行含值与 Raw 两段）"
+            $failures += "HOME 声明有 $homeCount 行，必须恰好 1 行"
           }
 
           if ($failures.Count) {
             $failures | ForEach-Object { Write-Error $_ }
             exit 1
           }
-          Write-Host "产物校验通过：包名、版本、别名、relay、HOME 唯一性全部符合"
-
+          Write-Host "产物校验通过"
+          Write-Host "  包名     $expectedPkg"
+          Write-Host "  版本     $expectedVersion"
+          Write-Host "  别名     HomeActivity 已启用"
+          Write-Host "  relay    Ba002BootRelay 已就位"
+          Write-Host "  HOME     声明唯一"
       - uses: actions/upload-artifact@v4
         with:
           name: MarcoTV-BA002

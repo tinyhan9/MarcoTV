@@ -313,7 +313,7 @@ REPO_BRANCH = "ba002"
 # versionName 与上游对齐（用户要求），versionCode 在上游基础上加这个数。
 # 每次本分支单独发修订版时把它加 1。上游发新版时通常可以归 0，
 # 因为上游的 code 本身已经变大了。
-RELEASE_REVISION = 7
+RELEASE_REVISION = 8
 FEED_PATH = "docs/updates/"
 
 # raw.githubusercontent 不受 Pages 与 CDN 缓存影响，改动立刻生效，放第一位。
@@ -337,7 +337,12 @@ UPDATE_FEEDS_NEW = """        // 本分支用自己的频道文件（ba002-stabl
 UPDATE_DOWNLOAD_OLD = """        String file="MarcoTV-"+version+(BuildEdition.RESTRICTED?"-Restricted":"")+".apk";
         return new String[]{MIRROR+file,"https://github.com/Pilipala9919/MarcoTV/releases/download/v"+version+"/"+file};"""
 UPDATE_DOWNLOAD_NEW = """        String file="MarcoTV-"+version+"-BA002.apk";
-        return new String[]{"https://github.com/""" + REPO_OWNER + "/" + REPO_NAME + """/releases/download/v"+version+"-ba002/"+file};"""
+        // 顺序有意为之：前两个在实测网络下可达，GitHub Release 作为最后兜底。
+        return new String[]{
+                "https://cdn.jsdelivr.net/gh/__REPO_OWNER__/__REPO_NAME__@__REPO_BRANCH__/docs/updates/"+file,
+                "https://raw.githubusercontent.com/__REPO_OWNER__/__REPO_NAME__/__REPO_BRANCH__/docs/updates/"+file,
+                "https://github.com/__REPO_OWNER__/__REPO_NAME__/releases/download/v"+version+"-ba002/"+file,
+        };"""
 
 # apkUrl 用整段方法替换而不是字符串锚点：方法体里有 Java 正则（反斜杠成对出现），
 # 写成 Python 字符串常量时转义层数极易数错，数错就会误报「上游结构变了」。
@@ -347,13 +352,23 @@ UPDATE_APKURL_NEW = """static boolean apkUrl(String value){
         try{
             URI u=new URI(value);
             if(!editionUrl(u.getPath()))return false;
-            // 只信任本仓库的 release 资产；官方包签名不同，verifyApk 仍会拒绝。
-            return "https".equals(u.getScheme())
-                    &&u.getUserInfo()==null&&u.getPort()==-1&&u.getQuery()==null&&u.getFragment()==null
-                    &&"github.com".equals(u.getHost())
-                    &&u.getPath().startsWith("/__REPO_OWNER__/__REPO_NAME__/releases/download/")
-                    &&u.getPath().endsWith(".apk")
-                    &&!u.getPath().contains("..")&&u.getRawPath().equals(u.getPath());
+            if(!"https".equals(u.getScheme()))return false;
+            if(u.getUserInfo()!=null||u.getPort()!=-1||u.getQuery()!=null||u.getFragment()!=null)return false;
+            if(!u.getRawPath().equals(u.getPath())||u.getPath().contains(".."))return false;
+            String host=u.getHost();
+            String path=u.getPath();
+            // 本仓库自己的三处存放位置：jsDelivr CDN、raw、GitHub Release。
+            // 官方仓库的 release 路径不在此列 —— 官方包签名不同，装不上。
+            if("cdn.jsdelivr.net".equals(host))
+                return path.startsWith("/gh/__REPO_OWNER__/__REPO_NAME__@__REPO_BRANCH__/docs/updates/")
+                        &&path.endsWith(".apk");
+            if("raw.githubusercontent.com".equals(host))
+                return path.startsWith("/__REPO_OWNER__/__REPO_NAME__/__REPO_BRANCH__/docs/updates/")
+                        &&path.endsWith(".apk");
+            if("github.com".equals(host))
+                return path.startsWith("/__REPO_OWNER__/__REPO_NAME__/releases/download/")
+                        &&path.endsWith(".apk");
+            return false;
         }catch(Exception e){
             return false;
         }
@@ -371,8 +386,15 @@ def patch_update_endpoint(stage: Path) -> None:
     text = read(policy)
     text = replace_once(text, UPDATE_MIRROR_OLD, UPDATE_MIRROR_NEW, "UpdatePolicy 的 FEED / MIRROR 常量")
     text = replace_once(text, UPDATE_FEEDS_OLD, UPDATE_FEEDS_NEW, "UpdatePolicy.feeds() 的频道文件名")
-    text = replace_once(text, UPDATE_DOWNLOAD_OLD, UPDATE_DOWNLOAD_NEW, "UpdatePolicy.downloads() 的下载地址")
-    new_apkurl = UPDATE_APKURL_NEW.replace("__REPO_OWNER__", REPO_OWNER).replace("__REPO_NAME__", REPO_NAME)
+    new_downloads = (UPDATE_DOWNLOAD_NEW
+                     .replace("__REPO_OWNER__", REPO_OWNER)
+                     .replace("__REPO_NAME__", REPO_NAME)
+                     .replace("__REPO_BRANCH__", REPO_BRANCH))
+    text = replace_once(text, UPDATE_DOWNLOAD_OLD, new_downloads, "UpdatePolicy.downloads() 的下载地址")
+    new_apkurl = (UPDATE_APKURL_NEW
+                  .replace("__REPO_OWNER__", REPO_OWNER)
+                  .replace("__REPO_NAME__", REPO_NAME)
+                  .replace("__REPO_BRANCH__", REPO_BRANCH))
     text, hits = re.subn(UPDATE_APKURL_PATTERN, new_apkurl, text, count=1, flags=re.S)
     if hits != 1:
         raise SystemExit("[ba002] 适配失败：UpdatePolicy.apkUrl() 结构变了，找不到方法边界")

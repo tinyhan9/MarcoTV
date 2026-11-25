@@ -100,3 +100,6 @@ CLAUDE.md
 # 极光盒子 7X（BA002）适配层
 build_ba002/
 dist-ba002/
+
+# 更新源里的 APK 需要提交（jsDelivr / raw 从这里取）
+!docs/updates/*.apk

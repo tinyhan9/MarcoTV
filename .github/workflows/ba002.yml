@@ -66,6 +66,11 @@ jobs:
           $bytes = [Convert]::FromBase64String($env:KEYSTORE_B64)
           [IO.File]::WriteAllBytes((Join-Path $dir 'ba002.p12'), $bytes)
 
+      - name: Offline relay policy checks
+        # relay 的「是否已在前台」判定写错过两次，都只有装到真机打 logcat 才暴露。
+        # 抽成 Ba002RelayPolicy 后在这里跑完所有分支，真机只用来确认最终效果。
+        run: python ba002/test_relay.py
+
       - name: Adapt and build
         env:
           BA002_STORE_PASSWORD: ${{ secrets.BA002_STORE_PASSWORD }}

@@ -15,7 +15,12 @@ def check():
         if not p.exists():errors.append('Missing '+rel);continue
         if any(part in {'private','.tools','build','research','references','verification','.git'} for part in p.relative_to(ROOT).parts):
             errors.append('Local-only path in release: '+rel)
-        if p.suffix in {'.p12','.jks','.keystore','.apk','.log'}:errors.append('Unexpected artifact: '+rel)
+        # docs/updates/ 是本分支的更新通道：feed 与它引用的 APK 必须放在一起，
+        # 因为实测网络下只有 jsDelivr / raw 这两个能服务仓库文件，
+        # github.com 的 release 下载会在中转时中断。其余位置的 .apk 仍然视为泄漏。
+        update_vehicle = rel.startswith('docs/updates/') and p.suffix=='.apk'
+        if p.suffix in {'.p12','.jks','.keystore','.apk','.log'} and not update_vehicle:
+            errors.append('Unexpected artifact: '+rel)
         if p.suffix in {'.java','.py','.xml','.md','.yml','.json','.cs','.mjs','.js','.html','.css','.sql'}:
             text=p.read_text(encoding='utf-8')
             if p.suffix in {'.java','.py','.xml','.yml','.cs','.mjs','.js','.html','.css','.sql'}:

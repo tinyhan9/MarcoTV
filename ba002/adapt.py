@@ -92,11 +92,11 @@ TEXT_SUFFIXES = {
 }
 
 # 上游 UpdateManager 的默认更新模式
+# 更新方式保持上游默认的 "notify"：自动检查、发现新版只提示，不下载不安装。
+# 用户看到提示后自己进「设置 → 系统与关于 → 软件更新」点「下载新版」→「安装已下载版本」。
+# 本分支唯一要改的是更新源地址（见 patch_update_endpoint），不是更新方式。
 UPDATE_MODE_OLD = 'return prefs.getString("mode","notify");'
-# download：自动检查并下载到本地，然后由用户在更新页点一下安装。
-# 之所以不选 off：本分支的更新源已经指向自己的仓库，包名与签名都对得上，
-# 自动更新是可以真正走通的。之所以不选 notify：那样用户还得自己点下载。
-UPDATE_MODE_NEW = 'return prefs.getString("mode","download");'
+UPDATE_MODE_NEW = 'return prefs.getString("mode","notify");'
 
 
 def log(message: str) -> None:
@@ -241,14 +241,15 @@ def patch_manifest(stage: Path, debuggable: bool) -> None:
     if not match:
         raise SystemExit("[ba002] manifest 里找不到 android:versionCode")
     official_code = int(match.group(1))
-    release_code = official_code + RELEASE_REVISION
+    release_code = official_code * VERSION_CODE_SCALE + RELEASE_REVISION
     if RELEASE_REVISION:
         text = text.replace(
             f'android:versionCode="{official_code}"',
             f'android:versionCode="{release_code}"',
             1,
         )
-    log(f"versionCode {official_code} -> {release_code}（versionName 保持上游）")
+    log(f"versionCode {official_code} -> {release_code}"
+        f"（{official_code} × {VERSION_CODE_SCALE} + {RELEASE_REVISION}，versionName 保持上游）")
 
     text = replace_once(text, ALIAS_OLD, ALIAS_NEW, "HomeActivity 别名的 enabled=false")
 
@@ -310,10 +311,18 @@ REPO_OWNER = "tinyhan9"
 REPO_NAME = "MarcoTV"
 REPO_BRANCH = "ba002"
 
-# versionName 与上游对齐（用户要求），versionCode 在上游基础上加这个数。
-# 每次本分支单独发修订版时把它加 1。上游发新版时通常可以归 0，
-# 因为上游的 code 本身已经变大了。
-RELEASE_REVISION = 9
+# versionName 与上游对齐（用户要求）。versionCode 用 upstream*10 + 本值。
+#
+# 为什么乘 10 而不是直接 +：上游每个版本 code 只 +1（0.21.2=45 → 0.21.3=46），
+# 本分支若在同一版本下连续发几个修订版，直接加会很快吃进上游的号段，
+# 上游一发新版就出现号序倒挂。乘 10 留出 0-9 共 9 个修订位，顺序永远成立。
+#
+#   上游 0.21.3 = 46  →  本分支 461、462、...
+#   上游 0.21.4 = 47  →  本分支 471（大于 462，仍是升级）
+#
+# 每次本分支单独发修订版时 +1；上游发新版时归 0 或保留（结果都会变大）。
+RELEASE_REVISION = 2
+VERSION_CODE_SCALE = 10
 FEED_PATH = "docs/updates/"
 
 # raw.githubusercontent 不受 Pages 与 CDN 缓存影响，改动立刻生效，放第一位。
@@ -406,11 +415,23 @@ def patch_update_endpoint(stage: Path) -> None:
 # ---------------------------------------------------------------- 5. 关闭应用内自动更新
 
 def disable_self_update(stage: Path) -> None:
+    """确认更新方式仍是上游默认的 notify，不要被误改。
+
+    本分支刻意**不动** UpdateManager.mode()：默认值 "notify" 就是
+    「自动检查、只提示、由用户决定是否下载安装」，与原版行为一致。
+    这里只做校验，防止后续有人不小心把它改成 download。
+    """
     manager = stage / "app/src/main/java" / NEW_PKG.replace(".", "/") / "UpdateManager.java"
     text = read(manager)
-    text = replace_once(text, UPDATE_MODE_OLD, UPDATE_MODE_NEW, "UpdateManager.mode() 默认值 notify")
-    write(manager, text)
-    log("应用内自动更新默认 download（自动下载、手动确认安装）")
+    if UPDATE_MODE_NEW != UPDATE_MODE_OLD:
+        text = replace_once(text, UPDATE_MODE_OLD, UPDATE_MODE_NEW, "UpdateManager.mode() 默认值")
+        write(manager, text)
+    elif UPDATE_MODE_OLD not in text:
+        raise SystemExit(
+            "[ba002] UpdateManager.mode() 的默认值不见了 —— 上游可能改了这一行，"
+            "请确认它是否仍是 notify（只提示、不自动下载）"
+        )
+    log('更新方式保持 notify：自动检查、只提示，由用户手动下载并安装')
 
 
 # ---------------------------------------------------------------- 5. 自检

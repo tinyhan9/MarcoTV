@@ -261,6 +261,19 @@ def patch_manifest(stage: Path, debuggable: bool) -> None:
             "application 标签（插入 debuggable）",
         )
 
+    # 前台轮询要用 UsageStatsManager，它由 PACKAGE_USAGE_STATS 这个 appop 门控。
+    # 这个权限是 signature|privileged|appop 级别，普通应用在 manifest 里声明它
+    # 不会自动获得，必须 adb 显式 appops set；但**不声明就完全没法授予**
+    # （pm grant 会直接报 "has not requested permission"），所以manifest 里要有。
+    if "PACKAGE_USAGE_STATS" not in text:
+        text = replace_once(
+            text,
+            '<uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />',
+            '<uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />\n'
+            '    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" />',
+            "PACKAGE_USAGE_STATS 声明（前台轮询）",
+        )
+
     if ".Ba002BootRelay" not in text:
         text = replace_once(text, RELAY_ANCHOR, RELAY_RECEIVER_XML + RELAY_ANCHOR, "RecoveryService 声明")
 
@@ -274,8 +287,9 @@ def patch_manifest(stage: Path, debuggable: bool) -> None:
 # Ba002RelayPolicy 把判定规则抽成纯逻辑，Ba002BootRelay 只负责接线 ——
 # 这样 ba002/test_relay.py 能在 JVM 上把所有分支跑完，不必装到电视上才发现判定写错。
 ADAPT_SOURCES = [
-    "Ba002BootRelay.java",
-    "Ba002RelayPolicy.java",
+    'Ba002BootRelay.java',
+    'Ba002RelayPolicy.java',
+    'Ba002ForegroundWatch.java',
 ]
 
 
@@ -321,7 +335,7 @@ REPO_BRANCH = "ba002"
 #   上游 0.21.4 = 47  →  本分支 471（大于 462，仍是升级）
 #
 # 每次本分支单独发修订版时 +1；上游发新版时归 0 或保留（结果都会变大）。
-RELEASE_REVISION = 2
+RELEASE_REVISION = 9
 VERSION_CODE_SCALE = 10
 FEED_PATH = "docs/updates/"
 
@@ -490,6 +504,7 @@ def adapt(source: Path, stage: Path, debuggable: bool = True) -> Path:
     patch_manifest(stage, debuggable)
     install_relay(stage)
     patch_update_endpoint(stage)
+    patch_application(stage)
     disable_self_update(stage)
     verify(stage)
     return stage
@@ -504,3 +519,27 @@ if __name__ == "__main__":
     parser.add_argument("--no-debuggable", action="store_true", help="不打开 android:debuggable")
     args = parser.parse_args()
     adapt(Path(args.source), Path(args.stage), debuggable=not args.no_debuggable)
+
+# --------------------------------------------- 7. 应用启动时接上前台轮询
+
+APPLICATION_ANCHOR = '        Diagnostics.init(this);'
+APPLICATION_PATCHED = '''        Diagnostics.init(this);
+        Ba002BootRelay.maybeStartWatch(this);'''
+
+
+def patch_application(stage: Path) -> None:
+    """让每次进程启动都接上前台轮询。
+
+    只靠 BOOT_COMPLETED 不够：用户重装、应用被系统回收后重建进程，都不再走
+    开机广播，而那正是「装了新版但抢前台不生效」的现场。Application.onCreate
+    是唯一每次都会经过的地方。小米电视 4A 上 HOME 解析不到本应用，这条路
+    是该机型能工作的关键。
+    """
+    app = stage / "app/src/main/java" / NEW_PKG.replace(".", "/") / "MarcoApplication.java"
+    text = read(app)
+    if "maybeStartWatch" in text:
+        return
+    text = replace_once(text, APPLICATION_ANCHOR, APPLICATION_PATCHED,
+                        "MarcoApplication.onCreate（接上前台轮询）")
+    write(app, text)
+    log("应用启动时接上前台轮询")
